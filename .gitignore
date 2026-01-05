@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# Sensitive Information
+google_oauth_credentials.json
+google_token.pickle
+*.pickle
+
+# Browser Profile (3439 files)
+avast_automation_profile/
+
+# Data & Logs
+data/downloads/
+logs/
+*.log
+server_stdout.txt
+
+# History Files
+*_history.json
+
+# Debug Files
+debug_*.py
+debug_*.png
+debug_*.html
+test_*.py
+analyze_*.py
+list_debug.html
+
+# Excel Templates (실제 데이터)
+Template*.xlsx
+
+# Batch Files (user-specific)
+ㅊㅊㅊㅊㅊㅊ
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary Files
+*.tmp
+*.bak
