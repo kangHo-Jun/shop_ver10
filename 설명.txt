@@ -1,2 +1,0 @@
-재고1 구매관리 구매입력 웹자료올리기
-https://loginab.ecount.com/ec5/view/erp?w_flag=1&ec_req_sid=AB-ESwtQV!YzTYvQ#menuType=MENUTREE_000004&menuSeq=MENUTREE_000510&groupSeq=MENUTREE_000031&prgId=E040303&depth=4
