@@ -9,48 +9,13 @@ Ecount ERP의 웹자료올리기 팝업에 붙여넣기
 
 import time
 import pyperclip
-from pathlib import Path
-from playwright.sync_api import sync_playwright
-
-# Google Sheets API (OAuth)
-import gspread
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-import os.path
-import pickle
+# Import centralized config
+from config import config
 
 # ============================================================
-# 설정
+# 설정 (V8.1: 중앙 설정 관리 도입)
 # ============================================================
-
-# Google Sheets 설정
-SPREADSHEET_ID = '1qEbhwGw4mstuMkhAJyFMK4QiIrZR_Gw3bFMR1wb2Las'
-SHEET_NAME = 'erp'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-
-# OAuth 토큰 저장 경로
-TOKEN_PATH = Path("c:/Users/DSAI/Desktop/매장자동화/google_token.pickle")
-CREDENTIALS_PATH = Path("c:/Users/DSAI/Desktop/매장자동화/google_oauth_credentials.json")
-TOKEN_PATH.parent.mkdir(exist_ok=True)
-
-# Ecount 설정
-LOGIN_URL = "https://login.ecount.com/Login"
-# 입금보고서 페이지 URL
-TARGET_PAGE = "https://loginab.ecount.com/ec5/view/erp?w_flag=1&ec_req_sid=AB-ESwtQV!YzTYvQ#menuType=MENUTREE_000004&menuSeq=MENUTREE_000510&groupSeq=MENUTREE_000031&prgId=E040303&depth=4"
-
-# 로그인 정보
-CREDENTIALS = {
-    'company_code': '650217',
-    'username': 'zartkang',
-    'password': 'dnemfosem3835!'
-}
-
-# 세션 저장 경로
-SESSION_PATH = Path("c:/Users/DSAI/ecount_automation/session.json")
-# 로그 디렉토리 → 작업 영역 내부로 변경하여 가시성 확보
-LOG_DIR = Path("c:/Users/DSAI/Desktop/매장자동화/logs/uploader")
-LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ============================================================
 # 메인 자동화 클래스
@@ -64,8 +29,8 @@ class ErpUploadAutomation:
         self.erp_data = []
         self.clipboard_text = ""  # JavaScript 붙여넣기용 데이터
         
-        # 로그 파일 설정
-        log_filename = LOG_DIR / f"erp_upload_{time.strftime('%Y%m%d_%H%M%S')}.log"
+        # 로그 파일 설정 (config 사용)
+        log_filename = config.UPLOADER_LOGS_DIR / f"erp_upload_{time.strftime('%Y%m%d_%H%M%S')}.log"
         self.log_file = open(log_filename, 'w', encoding='utf-8')
     
     def log(self, message: str):
@@ -84,8 +49,8 @@ class ErpUploadAutomation:
         creds = None
         
         # 저장된 토큰이 있으면 로드
-        if TOKEN_PATH.exists():
-            with open(TOKEN_PATH, 'rb') as token:
+        if config.GOOGLE_TOKEN_PATH.exists():
+            with open(config.GOOGLE_TOKEN_PATH, 'rb') as token:
                 creds = pickle.load(token)
         
         # 토큰이 없거나 만료된 경우
@@ -94,19 +59,19 @@ class ErpUploadAutomation:
                 self.log("🔄 토큰 갱신 중...")
                 creds.refresh(Request())
             else:
-                if not CREDENTIALS_PATH.exists():
-                    self.log(f"❌ credentials.json 파일이 필요합니다: {CREDENTIALS_PATH}")
+                if not config.GOOGLE_CREDENTIALS_PATH.exists():
+                    self.log(f"❌ credentials.json 파일이 필요합니다: {config.GOOGLE_CREDENTIALS_PATH}")
                     self.log("   Google Cloud Console에서 OAuth 2.0 클라이언트 ID를 생성하고")
                     self.log("   credentials.json 파일을 다운로드하세요.")
                     return None
                 
                 self.log("🔐 Google 인증을 위해 브라우저가 열립니다...")
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    str(CREDENTIALS_PATH), SCOPES)
+                    str(config.GOOGLE_CREDENTIALS_PATH), SCOPES)
                 creds = flow.run_local_server(port=0)
             
             # 토큰 저장
-            with open(TOKEN_PATH, 'wb') as token:
+            with open(config.GOOGLE_TOKEN_PATH, 'wb') as token:
                 pickle.dump(creds, token)
             self.log("✅ 토큰 저장 완료")
         
@@ -121,9 +86,10 @@ class ErpUploadAutomation:
             if not creds:
                 return False
             
+            import gspread
             gc = gspread.authorize(creds)
-            spreadsheet = gc.open_by_key(SPREADSHEET_ID)
-            worksheet = spreadsheet.worksheet(SHEET_NAME)
+            spreadsheet = gc.open_by_key(config.GS_SPREADSHEET_ID)
+            worksheet = spreadsheet.worksheet(config.GS_SHEET_NAME)
             
             # 모든 데이터 가져오기
             all_values = worksheet.get_all_values()
@@ -172,12 +138,13 @@ class ErpUploadAutomation:
     def start_browser(self, headless=False):
         """브라우저 시작 - 기존 Avast/Chrome 연결 시도"""
         self.log("🌐 브라우저 연결 중...")
+        from playwright.sync_api import sync_playwright
         self.playwright = sync_playwright().start()
         
-        # 1. 먼저 Avast 브라우저(port 9333) 연결 시도 (V6 다운로더와 공유)
+        # 1. 먼저 Avast 브라우저 연결 시도 (V6 다운로더와 공유)
         try:
-            self.log("   Avast 브라우저 연결 시도 (port 9333)...")
-            self.browser = self.playwright.chromium.connect_over_cdp("http://localhost:9333")
+            self.log(f"   Avast 브라우저 연결 시도 (port {config.BROWSER_DEBUG_PORT})...")
+            self.browser = self.playwright.chromium.connect_over_cdp(f"http://localhost:{config.BROWSER_DEBUG_PORT}")
             self.context = self.browser.contexts[0] if self.browser.contexts else self.browser.new_context()
             
             # ERP 업로드는 항상 새 탭에서 진행 (기존 탭은 다운로더가 사용 중)
@@ -290,13 +257,13 @@ class ErpUploadAutomation:
                 return False
         
         # 새 브라우저인 경우 기존 세션 파일 확인
-        if not SESSION_PATH.exists():
+        if not config.ECOUNT_SESSION_PATH.exists():
             self.log("ℹ️ 저장된 세션 없음")
             return False
         
         try:
             import json
-            with open(SESSION_PATH, 'r') as f:
+            with open(config.ECOUNT_SESSION_PATH, 'r') as f:
                 cookies = json.load(f)
             
             self.context.add_cookies(cookies)
@@ -325,7 +292,7 @@ class ErpUploadAutomation:
         try:
             import json
             cookies = self.context.cookies()
-            with open(SESSION_PATH, 'w') as f:
+            with open(config.ECOUNT_SESSION_PATH, 'w') as f:
                 json.dump(cookies, f)
             self.log("✅ 세션 저장 완료")
         except Exception as e:
@@ -334,21 +301,21 @@ class ErpUploadAutomation:
     def login(self) -> bool:
         """이카운트 로그인"""
         try:
-            self.log(f"🔐 로그인 페이지 이동: {LOGIN_URL}")
-            self.page.goto(LOGIN_URL, timeout=60000)
+            self.log(f"🔐 로그인 페이지 이동: {config.ECOUNT_LOGIN_URL}")
+            self.page.goto(config.ECOUNT_LOGIN_URL, timeout=60000)
             time.sleep(2)
             
             # 회사코드 입력
             self.log("   회사코드 입력...")
-            self.page.locator('input[name="com_code"]').fill(CREDENTIALS['company_code'])
+            self.page.locator('input[name="com_code"]').fill(config.ECOUNT_COMPANY_CODE)
             
             # 아이디 입력
             self.log("   아이디 입력...")
-            self.page.locator('input[name="id"]').fill(CREDENTIALS['username'])
+            self.page.locator('input[name="id"]').fill(config.ECOUNT_ID)
             
             # 비밀번호 입력
             self.log("   비밀번호 입력...")
-            self.page.locator('input[name="passwd"]').fill(CREDENTIALS['password'])
+            self.page.locator('input[name="passwd"]').fill(config.ECOUNT_PASSWORD)
             
             time.sleep(1)
             

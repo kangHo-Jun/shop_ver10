@@ -19,17 +19,31 @@ class Config:
         self.YOUNGRIM_ESTIMATE_URL = os.getenv("YOUNGRIM_ESTIMATE_URL", "http://door.yl.co.kr/oms/estimate_list.jsp")
         self.DOWNLOAD_INTERVAL_SEC = int(os.getenv("DOWNLOAD_INTERVAL_SEC", 1800))
         
+        # Ecount (ERP) Settings
+        self.ECOUNT_LOGIN_URL = os.getenv("ECOUNT_LOGIN_URL", "https://login.ecount.com/Login")
+        self.ECOUNT_COMPANY_CODE = os.getenv("ECOUNT_COMPANY_CODE", "")
+        self.ECOUNT_ID = os.getenv("ECOUNT_ID", "")
+        self.ECOUNT_PASSWORD = os.getenv("ECOUNT_PASSWORD", "")
+        
+        # Google Sheets Settings
+        self.GS_SPREADSHEET_ID = os.getenv("GS_SPREADSHEET_ID", "1qEbhwGw4mstuMkhAJyFMK4QiIrZR_Gw3bFMR1wb2Las")
+        self.GS_SHEET_NAME = os.getenv("GS_SHEET_NAME", "erp")
+        
         # Paths
-        self.DATA_DIR = self.base_dir / os.getenv("DATA_DIR", "data")
-        self.DOWNLOADS_DIR = self.base_dir / os.getenv("DOWNLOADS_DIR", "data/downloads")
-        self.LOGS_DIR = self.base_dir / os.getenv("LOGS_DIR", "logs")
-        self.HISTORY_FILE = os.getenv("HISTORY_FILE", "v8_history.json")
+        self.DATA_DIR = self.base_dir / os.getenv("DATA_DIR", "data") # Keep this line if DATA_DIR is still needed as a separate concept
+        self.DOWNLOADS_DIR = self.base_dir / "data" / "downloads"
+        self.LOGS_DIR = self.base_dir / "logs"
+        self.UPLOADER_LOGS_DIR = self.LOGS_DIR / "uploader"
+        self.HISTORY_FILE = os.getenv("HISTORY_FILE", "v8_history.json") # Keep this line if HISTORY_FILE is still needed
+        self.GOOGLE_TOKEN_PATH = self.base_dir / "google_token.pickle"
+        self.GOOGLE_CREDENTIALS_PATH = self.base_dir / "google_oauth_credentials.json"
+        self.ECOUNT_SESSION_PATH = self.base_dir / "ecount_session.json"
         
         # Ensure directories exist
-        self.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        for d in [self.DOWNLOADS_DIR, self.LOGS_DIR, self.UPLOADER_LOGS_DIR]:
+            d.mkdir(parents=True, exist_ok=True)
         (self.DOWNLOADS_DIR / "ledger").mkdir(parents=True, exist_ok=True)
         (self.DOWNLOADS_DIR / "estimate").mkdir(parents=True, exist_ok=True)
-        self.LOGS_DIR.mkdir(parents=True, exist_ok=True)
         
         # Browser
         self.BROWSER_DEBUG_PORT = int(os.getenv("BROWSER_DEBUG_PORT", 9333))
