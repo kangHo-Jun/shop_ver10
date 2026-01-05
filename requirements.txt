@@ -8,3 +8,4 @@ flask
 selenium
 webdriver-manager
 keyboard>=0.13.5
+python-dotenv>=1.0.0

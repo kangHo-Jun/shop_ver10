@@ -14,29 +14,24 @@ from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 import traceback
 
+# Import foundation modules
+from config import config
+from logging_config import logger
+from error_handler import error_handler, ErrorSeverity
+
 # Import existing logic
 try:
     import local_file_processor
-    from erp_upload_automation_v1 import ErpUploadAutomation  # V8: V7과 동일한 로그인 로직 사용
+    from erp_upload_automation_v1 import ErpUploadAutomation
 except ImportError as e:
-    print(f"Error importing modules: {e}")
+    logger.critical(f"Error importing modules: {e}")
     sys.exit(1)
 
-# Configuration
-HISTORY_FILE = "v8_history.json"  # V8 전용 히스토리
-DOWNLOAD_BASE_DIR = os.path.join(os.getcwd(), "data", "downloads")
-LEDGER_DOWNLOAD_DIR = os.path.join(DOWNLOAD_BASE_DIR, "ledger")
-ESTIMATE_DOWNLOAD_DIR = os.path.join(DOWNLOAD_BASE_DIR, "estimate")
-
-LOGIN_URL = "http://door.yl.co.kr/oms/main.jsp"
-LEDGER_LIST_URL = "http://door.yl.co.kr/oms/ledger_list.jsp"
-ESTIMATE_LIST_URL = "http://door.yl.co.kr/oms/estimate_list.jsp"
-CHECK_INTERVAL_SECONDS = 1800  # 30 minutes
-
+# Server setup
 app = Flask(__name__)
 lock = threading.Lock()
-ledger_lock = threading.Lock()    # 원장 업로드 전용 락
-estimate_lock = threading.Lock()  # 견적 업로드 전용 락
+ledger_lock = threading.Lock()
+estimate_lock = threading.Lock()
 
 # Status tracking
 server_status = {
@@ -46,113 +41,131 @@ server_status = {
     "ledger_uploader_status": "Idle",
     "estimate_uploader_status": "Idle",
     "last_error": None,
-    "last_log": ""  # V8: 상태 알림용
+    "last_log": "",
+    "empty_cycle_count": 0,
+    "start_time": datetime.datetime.now().isoformat()
 }
 
-# HTML Template for V6 UI
+# HTML Template for V8.1 UI
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>V8 Automation Control</title>
+    <title>V8.1 Automation Control</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; padding: 20px; background-color: #0d1117; color: #eee; }
-        .container { max-width: 700px; margin: 0 auto; }
-        h1 { color: #00d9ff; margin-bottom: 10px; }
-        .subtitle { color: #888; margin-bottom: 30px; }
-        .card { margin-bottom: 20px; padding: 25px; background: #16213e; border-radius: 12px; border: 1px solid #0f3460; }
-        .card h2 { margin-top: 0; font-size: 1.1em; color: #00d9ff; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #0d1117; color: #eee; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        h1 { color: #00d9ff; margin: 0; }
+        .uptime { font-size: 0.8em; color: #888; }
+        .card { margin-bottom: 20px; padding: 25px; background: #16213e; border-radius: 12px; border: 1px solid #0f3460; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .card h2 { margin-top: 0; font-size: 1.2em; color: #00d9ff; display: flex; justify-content: space-between; }
+        .badge { font-size: 0.7em; background: #0f3460; padding: 4px 10px; border-radius: 20px; color: #38ef7d; }
         .btn { display: inline-block; padding: 14px 28px; font-size: 15px; font-weight: bold; color: white; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; width: 100%; box-sizing: border-box; text-align: center; margin-top: 10px; transition: all 0.2s; }
         .btn-blue { background: linear-gradient(135deg, #667eea, #764ba2); }
-        .btn-blue:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); }
         .btn-green { background: linear-gradient(135deg, #11998e, #38ef7d); }
-        .btn-green:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(56, 239, 125, 0.4); }
         .btn-orange { background: linear-gradient(135deg, #f093fb, #f5576c); }
-        .btn-orange:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(245, 87, 108, 0.4); }
         .btn-gray { background: linear-gradient(135deg, #4b5d67, #322f3d); }
-        .btn-gray:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(75, 93, 103, 0.4); }
-        .btn-disabled { background: #444; cursor: not-allowed; }
-        .status-box { background: #0f3460; padding: 12px; border-radius: 6px; font-family: monospace; margin-top: 15px; font-size: 0.85em; }
-        .status-running { color: #38ef7d; }
-        .status-idle { color: #888; }
-        .refresh-link { display: block; margin-top: 25px; text-align: center; color: #667eea; }
-        .section-title { font-size: 0.9em; color: #888; margin-bottom: 15px; border-bottom: 1px solid #0f3460; padding-bottom: 10px; }
+        .btn:disabled { background: #444; opacity: 0.6; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
+        .status-box { background: #0f3460; padding: 15px; border-radius: 8px; font-family: 'Cascadia Code', monospace; margin-top: 15px; font-size: 0.9em; line-height: 1.6; }
+        .label { color: #888; margin-right: 10px; }
+        .val { color: #fff; }
+        .pending-count { color: #f5576c; font-weight: bold; }
+        .footer { text-align: center; margin-top: 40px; color: #444; font-size: 0.8em; }
+        .pulse { animation: pulse-animation 2s infinite; }
+        @keyframes pulse-animation { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
     </style>
     <script>
-        function triggerAction(endpoint, btnElement) {
-            const originalText = btnElement.innerText;
-            btnElement.innerText = "Processing...";
-            btnElement.disabled = true;
+        async function updateStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                
+                // Update Downloader
+                document.getElementById('dl-status').innerText = data.status.downloader_status;
+                document.getElementById('dl-last').innerText = data.status.downloader_last_run || 'None';
+                
+                // Update Ledger
+                document.getElementById('l-pending').innerText = data.pending.ledger;
+                document.getElementById('l-history').innerText = data.history_count.ledger;
+                const lBtn = document.getElementById('btn-l');
+                if (data.pending.ledger > 0 && data.status.ledger_uploader_status === 'Idle') {
+                    lBtn.disabled = false;
+                    lBtn.innerText = `⬆ Upload Ledger (${data.pending.ledger} items)`;
+                } else {
+                    lBtn.disabled = true;
+                    if (data.status.ledger_uploader_status === 'Running') lBtn.innerText = '⏳ Processing...';
+                    else lBtn.innerText = '⬆ No new items to upload';
+                }
 
-            fetch(endpoint, { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    console.log(data.message);
-                    location.reload();
-                })
-                .catch(err => {
-                    alert("Error: " + err);
-                    btnElement.innerText = originalText;
-                    btnElement.disabled = false;
-                });
+                // Update Estimate
+                document.getElementById('e-pending').innerText = data.pending.estimate;
+                document.getElementById('e-history').innerText = data.history_count.estimate;
+                const eBtn = document.getElementById('btn-e');
+                if (data.pending.estimate > 0 && data.status.estimate_uploader_status === 'Idle') {
+                    eBtn.disabled = false;
+                    eBtn.innerText = `⬆ Upload Estimate (${data.pending.estimate} items)`;
+                } else {
+                    eBtn.disabled = true;
+                    if (data.status.estimate_uploader_status === 'Running') eBtn.innerText = '⏳ Processing...';
+                    else eBtn.innerText = '⬆ No new items to upload';
+                }
+            } catch (e) { console.error("Stats update failed", e); }
         }
+
+        function triggerAction(endpoint, btn) {
+            btn.disabled = true;
+            fetch(endpoint, { method: 'POST' })
+                .then(r => r.json())
+                .then(d => { setTimeout(updateStats, 1000); })
+                .catch(e => { alert(e); btn.disabled = false; });
+        }
+
+        setInterval(updateStats, 3000);
+        window.onload = updateStats;
     </script>
 </head>
 <body>
     <div class="container">
-        <h1>⚡ V8 Automation Control</h1>
-        <p class="subtitle">로그인 없이 바로 업로드 + 붙여넣기 후 자동 종료</p>
+        <div class="header">
+            <h1>⚡ V8.1 Dashboard</h1>
+            <div class="uptime">V8.1 Enhanced Server</div>
+        </div>
 
-        <!-- Downloader Section -->
         <div class="card">
-            <h2>📥 Auto Downloader (30분 간격)</h2>
-            <p class="section-title">원장조회/견적조회 페이지를 자동으로 감시하고 새 주문을 다운로드합니다.</p>
-            {% if status.downloader_active %}
-                <button class="btn btn-disabled" disabled>✅ 자동 감시 중 (30분 간격)</button>
-            {% else %}
-                <button class="btn btn-green" onclick="triggerAction('/start_downloader', this)">▶ Start Auto-Downloader</button>
-            {% endif %}
+            <h2>📥 Auto Downloader <span class="badge pulse">Active</span></h2>
             <div class="status-box">
-                상태: <span class="{{ 'status-running' if status.downloader_active else 'status-idle' }}">{{ status.downloader_status }}</span><br>
-                마지막 실행: {{ status.downloader_last_run or 'Never' }}
+                <div><span class="label">Status:</span><span class="val" id="dl-status">Loading...</span></div>
+                <div><span class="label">Last Run:</span><span class="val" id="dl-last">-</span></div>
             </div>
         </div>
 
-        <!-- Upload Section: Ledger -->
         <div class="card">
-            <h2>📦 원장 데이터 → 구매입력</h2>
-            <p class="section-title">원장조회에서 다운로드된 파일을 ERP 구매입력에 업로드합니다.</p>
-            {% if status.ledger_uploader_status == 'Running' %}
-                <button class="btn btn-disabled" disabled>⏳ 업로드 중...</button>
-            {% else %}
-                <button class="btn btn-blue" onclick="triggerAction('/trigger_ledger', this)">⬆ Upload Ledger (구매입력)</button>
-            {% endif %}
+            <h2>📦 Purchase Order (원장)</h2>
             <div class="status-box">
-                상태: {{ status.ledger_uploader_status }}<br>
-                원장 이력: {{ history_count.ledger }}건
+                <div><span class="label">Pending:</span><span class="val pending-count" id="l-pending">0</span> items</div>
+                <div><span class="label">History:</span><span class="val" id="l-history">0</span> processed</div>
             </div>
+            <button id="btn-l" class="btn btn-blue" onclick="triggerAction('/trigger_ledger', this)" disabled>⬆ Upload Ledger</button>
         </div>
 
-        <!-- Upload Section: Estimate -->
         <div class="card">
-            <h2>📋 견적 데이터 → 견적서입력</h2>
-            <p class="section-title">견적조회에서 다운로드된 파일을 ERP 견적서입력에 업로드합니다.</p>
-            {% if status.estimate_uploader_status == 'Running' %}
-                <button class="btn btn-disabled" disabled>⏳ 업로드 중...</button>
-            {% else %}
-                <button class="btn btn-orange" onclick="triggerAction('/trigger_estimate', this)">⬆ Upload Estimate (견적서입력)</button>
-            {% endif %}
+            <h2>📋 Sales Estimate (견적)</h2>
             <div class="status-box">
-                상태: {{ status.estimate_uploader_status }}<br>
-                견적 이력: {{ history_count.estimate }}건
+                <div><span class="label">Pending:</span><span class="val pending-count" id="e-pending">0</span> items</div>
+                <div><span class="label">History:</span><span class="val" id="e-history">0</span> processed</div>
             </div>
-        <div class="card">
-            <h2>🛠 Server Control</h2>
-            <p class="section-title">작업이 멈췄거나 강제 초기화가 필요한 경우 사용하세요.</p>
-            <button class="btn btn-gray" onclick="triggerAction('/reset_status', this)">🔄 Reset Server Status (상태 초기화)</button>
+            <button id="btn-e" class="btn btn-orange" onclick="triggerAction('/trigger_estimate', this)" disabled>⬆ Upload Estimate</button>
         </div>
 
-        <a href="javascript:location.reload()" class="refresh-link">🔄 Refresh Status</a>
+        <div class="card">
+            <h2>⚙️ Control</h2>
+            <button class="btn btn-gray" onclick="triggerAction('/reset_status', this)">🔄 Reset Server Status</button>
+        </div>
+
+        <div class="footer">
+            Shop Automation V8.1 | &copy; 2026 Antigravity
+        </div>
     </div>
 </body>
 </html>
@@ -171,10 +184,10 @@ class DoorBrowser:
             except:
                 self.driver = None
 
-        print("[Browser] Launching Avast Browser for Scraping...")
+        logger.info("[Browser] Launching Avast Browser for Scraping...")
         avast_path = r"C:\Program Files\AVAST Software\Browser\Application\AvastBrowser.exe"
-        profile_dir = os.path.join(os.getcwd(), "avast_automation_profile")
-        debug_port = 9333
+        profile_dir = config.base_dir / config.BROWSER_PROFILE_NAME
+        debug_port = config.BROWSER_DEBUG_PORT
         
         cmd = [
             avast_path,
@@ -182,8 +195,12 @@ class DoorBrowser:
             f"--user-data-dir={profile_dir}",
             "--no-first-run",
             "--no-default-browser-check", 
-            LOGIN_URL
+            config.YOUNGRIM_URL
         ]
+        
+        if config.BROWSER_HEADLESS:
+            logger.info("[Browser] Running in HEADLESS mode (No Window)")
+            cmd.insert(1, "--headless=new")
         subprocess.Popen(cmd)
         time.sleep(3)
         
@@ -238,17 +255,21 @@ class AutoDownloader(threading.Thread):
         self.active_mode = True
 
     def run(self):
-        print("[Downloader] Thread Initiated. Waiting for start command...")
+        logger.info("[Downloader] Thread Initiated. Waiting for start command...")
         while self.running:
             if self.active_mode:
                 try:
                     self.download_cycle()
                 except Exception as e:
-                    print(f"[Downloader] Error: {e}")
-                    server_status["last_error"] = str(e)
-                    traceback.print_exc()
+                    error_handler.handle(e, context={"thread": "Downloader"}, severity=ErrorSeverity.HIGH)
                 
-                for _ in range(CHECK_INTERVAL_SECONDS // 5):
+                # Intelligent Wait based on empty cycles
+                wait_sec = config.DOWNLOAD_INTERVAL_SEC
+                if server_status["empty_cycle_count"] >= 5:
+                    wait_sec = min(wait_sec * 2, 7200) # Max 2 hours
+                    logger.info(f"[Downloader] Consecutive empty cycles detected ({server_status['empty_cycle_count']}). Extending wait to {wait_sec//60} min.")
+                
+                for _ in range(wait_sec // 5):
                     if not self.running: break
                     time.sleep(5)
             else:
@@ -258,26 +279,30 @@ class AutoDownloader(threading.Thread):
         server_status["downloader_status"] = "Running"
         server_status["downloader_last_run"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        print("\n[Downloader] Starting cycle...")
+        logger.info("[Downloader] Starting cycle...")
         
         # 1. Launch/Check Browser
         browser_manager.launch()
         
-        # 브라우저가 열리면 우선 메인 페이지로 이동하여 로그인 보장
-        print(f"[Downloader] Navigating to {LOGIN_URL} to ensure session...")
-        browser_manager.navigate(LOGIN_URL)
-        time.sleep(3) # 로그인 처리/세션 유효 대기
+        logger.info(f"[Downloader] Navigating to {config.YOUNGRIM_URL} to ensure session...")
+        browser_manager.navigate(config.YOUNGRIM_URL)
+        time.sleep(3)
         
         # 2. Download from Ledger List
-        print("[Downloader] Processing Ledger List...")
-        self.download_from_page(LEDGER_LIST_URL, LEDGER_DOWNLOAD_DIR, "ledger")
+        logger.info("[Downloader] Processing Ledger List...")
+        l_new = self.download_from_page(config.YOUNGRIM_LEDGER_URL, config.DOWNLOADS_DIR / "ledger", "ledger")
         
         # 3. Download from Estimate List
-        print("[Downloader] Processing Estimate List...")
-        self.download_from_page(ESTIMATE_LIST_URL, ESTIMATE_DOWNLOAD_DIR, "estimate")
+        logger.info("[Downloader] Processing Estimate List...")
+        e_new = self.download_from_page(config.YOUNGRIM_ESTIMATE_URL, config.DOWNLOADS_DIR / "estimate", "estimate")
         
-        print(f"[Downloader] Cycle finished.")
-        server_status["downloader_status"] = "대기 중 (다음 실행: 30분 후)"
+        if l_new == 0 and e_new == 0:
+            server_status["empty_cycle_count"] += 1
+        else:
+            server_status["empty_cycle_count"] = 0
+            
+        logger.info(f"[Downloader] Cycle finished. New: L={l_new}, E={e_new}")
+        server_status["downloader_status"] = "Idle"
 
     def download_from_page(self, list_url, save_base_dir, source_type):
         """Download items from a specific list page"""
@@ -328,46 +353,39 @@ class AutoDownloader(threading.Thread):
             new_count += 1
             time.sleep(1)
             
-        print(f"[Downloader] {source_type}: Downloaded {new_count} new files.")
-
+        return new_count
 
 def manual_upload_process(source_type, erp_target):
-    """Manual trigger logic: Load files -> Process -> Upload"""
-    print(f"\n[Uploader] Manual Upload Process Started for {source_type}.")
+    """Manual trigger logic with Early Stop and Logging."""
+    logger.info(f"[Uploader] Manual Upload Process Triggered for {source_type}.")
     
     status_key = f"{source_type}_uploader_status"
-    
-    # 작업 락 선택
     target_lock = ledger_lock if source_type == "ledger" else estimate_lock
     
     if not target_lock.acquire(blocking=False):
-        print(f"[Uploader] {source_type} upload is already in progress. Skipping.")
+        logger.warning(f"[Uploader] {source_type} upload is already in progress. Skipping.")
         return 0
         
     server_status[status_key] = "Running"
     
     try:
+        # Load local history
         history = load_history()
         history_list = history.get(source_type, [])
         
-        if source_type == "ledger":
-            download_dir = LEDGER_DOWNLOAD_DIR
-        else:
-            download_dir = ESTIMATE_DOWNLOAD_DIR
-        
-        if not os.path.exists(download_dir):
-             print(f"[Uploader] No {source_type} download directory found.")
-             server_status[status_key] = "Idle"
+        target_dir = config.DOWNLOADS_DIR / source_type
+        if not target_dir.exists():
+             logger.info(f"[Uploader] No {source_type} directory found at {target_dir}. Early Stop.")
              return 0
 
+        # Scan for files
         file_list = []
-        for root, dirs, files in os.walk(download_dir):
+        for root, dirs, files in os.walk(target_dir):
             for file in files:
                 if file.endswith(".html"):
                     file_list.append(os.path.join(root, file))
         
-        print(f"[Uploader] Found {len(file_list)} cached {source_type} files.")
-        
+        # Filter files not in history
         pending_files = []
         for fpath in file_list:
             fname = os.path.basename(fpath)
@@ -375,12 +393,12 @@ def manual_upload_process(source_type, erp_target):
             if chulhano not in history_list:
                 pending_files.append(fpath)
                 
+        # --- EARLY STOP ---
         if not pending_files:
-            print(f"[Uploader] All {source_type} files already processed. Nothing to do.")
-            server_status[status_key] = "Idle"
+            logger.info(f"[Uploader] All {source_type} items already processed in history. No new files found. Stopping without launching browser.")
             return 0
             
-        print(f"[Uploader] Processing {len(pending_files)} pending {source_type} files...")
+        logger.info(f"[Uploader] Found {len(pending_files)} pending {source_type} files. Proceeding with upload...")
         
         all_data_rows = []
         processed_chulhanos = []
@@ -389,57 +407,56 @@ def manual_upload_process(source_type, erp_target):
             fname = os.path.basename(fpath)
             chulhano = os.path.splitext(fname)[0]
             
-            if chulhano in history_list: continue
-            
-            # V7: 견적(estimate)일 경우 target_type='estimate' 전달하여 O/P/Q열 레이아웃 적용
+            # V7/V8 logic: Determine type for parser
             file_target_type = 'estimate' if source_type == 'estimate' else 'ledger'
-            data_rows = local_file_processor.process_html_file(fpath, target_type=file_target_type)
-            
-            if data_rows:
-                all_data_rows.extend(data_rows)
-                processed_chulhanos.append(chulhano)
-            else:
-                print(f"   [Skip] No data in {chulhano}")
+            try:
+                data_rows = local_file_processor.process_html_file(fpath, target_type=file_target_type)
+                if data_rows:
+                    all_data_rows.extend(data_rows)
+                    processed_chulhanos.append(chulhano)
+            except Exception as e:
+                error_handler.handle(e, context={"file": fname, "type": source_type}, severity=ErrorSeverity.MEDIUM)
 
         if not all_data_rows:
-             print(f"[Uploader] No valid data found in pending {source_type} files.")
-             server_status[status_key] = "Idle"
+             logger.info(f"[Uploader] No valid data rows extracted from {len(pending_files)} pending files.")
              return 0
 
-        # V8: 10건 제한 해제
-        # if len(all_data_rows) > 10:
-        #     print(f"> [Test Mode] Data rows limited to 10 (Original: {len(all_data_rows)})")
-        #     all_data_rows = all_data_rows[:10]
-
-        # V8: 상태 로그
-        print(f"> Batch Uploading {len(all_data_rows)} rows from {len(processed_chulhanos)} {source_type} files...")
+        logger.info(f"[Uploader] Batch Uploading {len(all_data_rows)} rows to ERP ({erp_target})...")
         server_status["last_log"] = f"Uploading {len(all_data_rows)} rows..."
         
+        # ERP Upload with Retry (Phase 2 Improvement)
         erp_uploader = ErpUploadAutomation()
+        max_retries = config.MAX_RETRIES
+        delay = config.RETRY_DELAY_SEC
         
-        try:
-            # V8: V7과 동일한 로그인 로직 사용
-            success = erp_uploader.run(direct_data=all_data_rows, auto_close=False, target_type=erp_target)
-            
-            if success:
-                for chulhano in processed_chulhanos:
-                    history_list.append(chulhano)
-                history[source_type] = history_list
-                save_history(history)
-                print(f"   [Done] {source_type} Batch Upload Success. History updated.")
-                return len(processed_chulhanos)
-            else:
-                print(f"   [Fail] {source_type} Batch Upload returned False.")
-                return 0
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[Uploader] {source_type} Upload Attempt {attempt+1}/{max_retries}...")
+                success = erp_uploader.run(direct_data=all_data_rows, auto_close=False, target_type=erp_target)
                 
-        except Exception as e:
-            print(f"   [Fail] {source_type} Upload Exception: {e}")
-            raise e
+                if success:
+                    for chulhano in processed_chulhanos:
+                        history_list.append(chulhano)
+                    history[source_type] = history_list
+                    save_history(history)
+                    logger.info(f"[Uploader] {source_type} Batch Upload SUCCESS on attempt {attempt+1}.")
+                    return len(processed_chulhanos)
+                else:
+                    logger.warning(f"[Uploader] {source_type} Batch Upload returned False on attempt {attempt+1}.")
+            
+            except Exception as e:
+                error_handler.handle(e, context={"action": "erp_upload", "attempt": attempt+1}, severity=ErrorSeverity.MEDIUM)
+            
+            if attempt < max_retries - 1:
+                logger.info(f"[Uploader] Retrying in {delay} seconds...")
+                time.sleep(delay)
+                delay *= 2 # Exponential backoff
+        
+        logger.error(f"[Uploader] {source_type} Batch Upload FAILED after {max_retries} attempts.")
+        return 0
 
     except Exception as e:
-        print(f"[Uploader] {source_type} Critical Error: {e}")
-        server_status["last_error"] = str(e)
-        traceback.print_exc()
+        error_handler.handle(e, context={"uploader": source_type}, severity=ErrorSeverity.CRITICAL)
         return -1
     finally:
         server_status[status_key] = "Idle"
@@ -509,32 +526,51 @@ def reset_status_endpoint():
         
     return jsonify({"status": "reset", "message": "Server status has been reset to Idle."})
 
-@app.route('/status', methods=['GET'])
-def get_status():
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
+    """Return structured stats for dashboard."""
     history = load_history()
+    
+    # Simple count of pending files
+    l_pending = 0
+    e_pending = 0
+    try:
+        if (config.DOWNLOADS_DIR / "ledger").exists():
+            l_pending = len([f for f in os.listdir(config.DOWNLOADS_DIR / "ledger") if f.endswith(".html")])
+        if (config.DOWNLOADS_DIR / "estimate").exists():
+            e_pending = len([f for f in os.listdir(config.DOWNLOADS_DIR / "estimate") if f.endswith(".html")])
+    except:
+        pass
+
     return jsonify({
-        "server_status": server_status,
+        "status": server_status,
         "history_count": {
             "ledger": len(history.get("ledger", [])),
             "estimate": len(history.get("estimate", []))
+        },
+        "pending": {
+            "ledger": l_pending,
+            "estimate": e_pending
+        },
+        "config": {
+            "interval": config.DOWNLOAD_INTERVAL_SEC,
+            "port": config.FLASK_PORT
         }
     })
 
 if __name__ == "__main__":
-    print("="*50)
-    print("⚡ V8 Hybrid Automation Server")
-    print("로그인 없이 바로 업로드 + 붙여넣기 후 자동 종료")
-    print("Access the UI at: http://localhost:5080")
-    print("="*50)
+    logger.info("="*50)
+    logger.info("⚡ V8.1 Enhanced Automation Server")
+    logger.info(f"Access UI: http://localhost:{config.FLASK_PORT}")
+    logger.info("="*50)
     
     # Init Background Downloader
     downloader_thread = AutoDownloader()
     downloader_thread.start()
     
-    # V8: Auto-activate downloader on server start
-    print("[V8] Auto-activating downloader on startup...")
+    # Auto-activate
     downloader_thread.activate()
     server_status["downloader_active"] = True
     
-    # Start Web Server (V8: 포트 5080 사용)
-    app.run(host='0.0.0.0', port=5080)
+    # Run server
+    app.run(host='0.0.0.0', port=config.FLASK_PORT, debug=config.FLASK_DEBUG)

@@ -10,6 +10,7 @@ ENV/
 env/
 
 # Sensitive Information
+.env
 google_oauth_credentials.json
 google_token.pickle
 *.pickle
