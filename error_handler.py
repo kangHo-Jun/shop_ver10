@@ -22,14 +22,23 @@ class ErrorHandler:
         """Log error with context and severity."""
         error_type = type(error).__name__
         msg = f"[{error_type}] {str(error)}"
-        
+
         # Determine logging level
         log_level = getattr(logging, severity.value)
         self.logger.log(log_level, msg, extra={"context": context} if context else None)
-        
+
         # For High/Critical, store in a separate structured error log
         if severity in [ErrorSeverity.HIGH, ErrorSeverity.CRITICAL]:
             self._save_to_error_log(error, context, severity)
+
+    def log_error(self, message, severity=ErrorSeverity.MEDIUM, context=None):
+        """Alias for handle() for backward compatibility with lock_manager."""
+        # Create a dummy exception with the message
+        class LoggedError(Exception):
+            pass
+
+        error = LoggedError(message)
+        self.handle(error, context=context, severity=severity)
 
     def _save_to_error_log(self, error, context, severity):
         record = {

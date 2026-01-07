@@ -34,7 +34,7 @@ class Config:
         self.DOWNLOADS_DIR = self.base_dir / "data" / "downloads"
         self.LOGS_DIR = self.base_dir / "logs"
         self.UPLOADER_LOGS_DIR = self.LOGS_DIR / "uploader"
-        self.HISTORY_FILE = os.getenv("HISTORY_FILE", "v8_history.json") # Keep this line if HISTORY_FILE is still needed
+        self.HISTORY_FILE = self.base_dir / os.getenv("HISTORY_FILE", "v10_history.json")  # V10: Updated history file
         self.GOOGLE_TOKEN_PATH = self.base_dir / "google_token.pickle"
         self.GOOGLE_CREDENTIALS_PATH = self.base_dir / "google_oauth_credentials.json"
         self.ECOUNT_SESSION_PATH = self.base_dir / "ecount_session.json"
@@ -54,8 +54,13 @@ class Config:
         self.MAX_RETRIES = int(os.getenv("MAX_RETRIES", 3))
         self.RETRY_DELAY_SEC = int(os.getenv("RETRY_DELAY_SEC", 2))
 
+        # V10: Distributed Lock Settings
+        self.LOCK_TIMEOUT_SEC = int(os.getenv("LOCK_TIMEOUT_SEC", 1800))  # 30 minutes default
+        self.LOCK_SHEET_NAME = os.getenv("LOCK_SHEET_NAME", "processing_lock")
+        self.ENABLE_DISTRIBUTED_LOCK = os.getenv("ENABLE_DISTRIBUTED_LOCK", "true").lower() == "true"
+
     def __repr__(self):
-        return f"<Config Ports={self.FLASK_PORT} Interval={self.DOWNLOAD_INTERVAL_SEC}>"
+        return f"<Config V10 Ports={self.FLASK_PORT} Interval={self.DOWNLOAD_INTERVAL_SEC} DistLock={self.ENABLE_DISTRIBUTED_LOCK}>"
 
 # Singleton instance
 config = Config()
